@@ -52,6 +52,7 @@ def create_cga_entities(
     level_dir: str | Path,
     client_root: str | Path,
     *,
+    import_mode: str = "VISUAL",
     apply_angles: bool = True,
     apply_smoothing_groups: bool = False,
     animate_texture_sequences: bool = False,
@@ -65,6 +66,13 @@ def create_cga_entities(
     level_path = Path(level_dir)
     client_root_path = Path(client_root)
     source_path = level_path / "mission_mission0.xml"
+    if import_mode not in {"VISUAL", "COLLISION"}:
+        raise ValueError(f"unsupported CGA entity import mode: {import_mode}")
+    if import_mode == "COLLISION":
+        apply_smoothing_groups = False
+        animate_texture_sequences = False
+        animate_shader_uv_scroll = False
+        animate_cga_controllers = False
     if limit is not None and limit < 1:
         raise ValueError("CGA entities limit must be positive")
     if not source_path.is_file():
@@ -114,6 +122,7 @@ def create_cga_entities(
             template_cache,
             load_cgf,
             get_cgf_import_report,
+            import_mode=import_mode,
             apply_smoothing_groups=apply_smoothing_groups,
             animate_texture_sequences=animate_texture_sequences,
             animate_shader_uv_scroll=animate_shader_uv_scroll,
@@ -142,6 +151,7 @@ def create_cga_entities(
             timing_present,
             getattr(report, "cga_animation_status", "controller_not_decoded"),
             getattr(report, "cga_controller_animations_applied", 0),
+            import_mode=import_mode,
             apply_angles=apply_angles,
         )
         collection.objects.link(instance)
@@ -187,13 +197,14 @@ def _cga_template_collection(
     load_cgf,
     get_cgf_import_report,
     *,
+    import_mode: str,
     apply_smoothing_groups: bool,
     animate_texture_sequences: bool,
     animate_shader_uv_scroll: bool,
     animate_cga_controllers: bool,
     texture_animation_fps: int,
 ):
-    key = str(candidate.resolved_path)
+    key = (str(candidate.resolved_path), import_mode)
     cached = template_cache.get(key)
     if cached is not None:
         return cached
@@ -204,7 +215,7 @@ def _cga_template_collection(
     result = load_cgf(
         context,
         str(candidate.resolved_path),
-        import_mode="VISUAL",
+        import_mode=import_mode,
         apply_smoothing_groups=apply_smoothing_groups,
         animate_texture_sequences=animate_texture_sequences,
         animate_shader_uv_scroll=animate_shader_uv_scroll,
@@ -238,6 +249,7 @@ def _create_cga_instance(
     animation_status,
     animations_applied,
     *,
+    import_mode,
     apply_angles,
 ):
     obj = bpy.data.objects.new(_object_name(candidate), None)
@@ -255,6 +267,7 @@ def _create_cga_instance(
         timing_present,
         animation_status,
         animations_applied,
+        import_mode,
         angles_used,
     )
     return obj
@@ -267,6 +280,7 @@ def _assign_custom_properties(
     timing_present,
     animation_status,
     animations_applied,
+    import_mode,
     angles_used,
 ):
     obj["aion_cga_entity"] = True
@@ -276,6 +290,7 @@ def _assign_custom_properties(
     obj["aion_cga_timing_present"] = bool(timing_present)
     obj["aion_cga_animation_status"] = str(animation_status or "controller_not_decoded")
     obj["aion_cga_controller_animations_applied"] = int(animations_applied or 0)
+    obj["aion_import_mode"] = str(import_mode)
     obj["aion_source_file"] = candidate.source_file
     obj["aion_entity_id"] = candidate.entity_id
     obj["aion_entity_name"] = candidate.entity_name

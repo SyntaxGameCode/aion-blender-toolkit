@@ -39,7 +39,11 @@ class AION_OT_import_level_folder(bpy.types.Operator, ImportHelper):
         description="What to import from resolved level CGF references",
         items=(
             ("VISUAL", "Visual", "Import visual level content"),
-            ("COLLISION", "Collision", "Import terrain heightfield and collision geometry only"),
+            (
+                "COLLISION",
+                "Collision",
+                "Import terrain heightfield plus collision geometry from CGF and placed CGA entities",
+            ),
         ),
         default="VISUAL",
     )
@@ -242,9 +246,9 @@ class AION_OT_import_level_folder(bpy.types.Operator, ImportHelper):
         effective_import_static_lights = visual_mode and self.import_static_lights
         effective_import_mission_placeables = visual_mode and self.import_mission_placeables
         effective_import_particle_effects = visual_mode and self.import_particle_effects
-        effective_import_cga_entities = visual_mode and self.import_cga_entities
+        effective_import_cga_entities = self.import_cga_entities if visual_mode else True
         effective_animate_cga_controllers = (
-            effective_import_cga_entities and self.animate_cga_controllers
+            visual_mode and effective_import_cga_entities and self.animate_cga_controllers
         )
         effective_animate_texture_sequences = visual_mode and self.animate_texture_sequences
         effective_animate_shader_uv_scroll = visual_mode and self.animate_shader_uv_scroll
@@ -253,35 +257,51 @@ class AION_OT_import_level_folder(bpy.types.Operator, ImportHelper):
             self.report({"ERROR"}, f"Terrain preview file is missing: {terrain_path}")
             return {"CANCELLED"}
 
-        result = import_level(
-            context,
-            self.filepath,
-            self.client_root,
-            import_mode=self.import_mode,
-            limited_preview=self.limited_preview,
-            max_unique_cgfs=self.max_unique_cgfs,
-            max_placements_per_template=self.max_placements_per_template,
-            import_terrain=effective_import_terrain,
-            import_terrain_textures=effective_import_terrain_textures,
-            import_terrain_blend_attributes=effective_import_terrain_blend_attributes,
-            import_terrain_blend_shader=effective_import_terrain_blend_shader,
-            import_water=effective_import_water,
-            import_textured_liquid_surface=effective_import_textured_liquid_surface,
-            liquid_kind=self.liquid_kind,
-            liquid_preset=self.liquid_preset,
-            import_static_lights=effective_import_static_lights,
-            static_lights_mode=self.static_lights_mode,
-            static_lights_power=self.static_lights_power,
-            import_mission_placeables=effective_import_mission_placeables,
-            apply_mission_angles=self.apply_mission_angles,
-            import_particle_effects=effective_import_particle_effects,
-            import_cga_entities=effective_import_cga_entities,
-            animate_cga_controllers=effective_animate_cga_controllers,
-            apply_smoothing_groups=self.apply_smoothing_groups,
-            animate_texture_sequences=effective_animate_texture_sequences,
-            animate_shader_uv_scroll=effective_animate_shader_uv_scroll,
-            texture_animation_fps=self.texture_animation_fps,
-        )
+        window_manager = context.window_manager
+        workspace = context.workspace
+
+        def update_progress(progress):
+            window_manager.progress_update(round(progress.fraction * 100))
+            workspace.status_text_set(
+                f"Aion level import: {progress.message} "
+                f"({progress.completed}/{progress.total})"
+            )
+
+        window_manager.progress_begin(0, 100)
+        try:
+            result = import_level(
+                context,
+                self.filepath,
+                self.client_root,
+                import_mode=self.import_mode,
+                limited_preview=self.limited_preview,
+                max_unique_cgfs=self.max_unique_cgfs,
+                max_placements_per_template=self.max_placements_per_template,
+                import_terrain=effective_import_terrain,
+                import_terrain_textures=effective_import_terrain_textures,
+                import_terrain_blend_attributes=effective_import_terrain_blend_attributes,
+                import_terrain_blend_shader=effective_import_terrain_blend_shader,
+                import_water=effective_import_water,
+                import_textured_liquid_surface=effective_import_textured_liquid_surface,
+                liquid_kind=self.liquid_kind,
+                liquid_preset=self.liquid_preset,
+                import_static_lights=effective_import_static_lights,
+                static_lights_mode=self.static_lights_mode,
+                static_lights_power=self.static_lights_power,
+                import_mission_placeables=effective_import_mission_placeables,
+                apply_mission_angles=self.apply_mission_angles,
+                import_particle_effects=effective_import_particle_effects,
+                import_cga_entities=effective_import_cga_entities,
+                animate_cga_controllers=effective_animate_cga_controllers,
+                apply_smoothing_groups=self.apply_smoothing_groups,
+                animate_texture_sequences=effective_animate_texture_sequences,
+                animate_shader_uv_scroll=effective_animate_shader_uv_scroll,
+                texture_animation_fps=self.texture_animation_fps,
+                progress_callback=update_progress,
+            )
+        finally:
+            workspace.status_text_set(None)
+            window_manager.progress_end()
 
         failure_samples = _format_cgf_issues(result.failures)
         skip_samples = _format_cgf_issues(result.skipped_templates)

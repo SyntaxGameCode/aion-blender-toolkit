@@ -96,6 +96,20 @@ class LevelTemplatePlacementStats:
 
 
 @dataclass(frozen=True)
+class LevelImportProgress:
+    stage: str
+    message: str
+    completed: int
+    total: int
+
+    @property
+    def fraction(self) -> float:
+        if self.total < 1:
+            return 0.0
+        return min(max(self.completed / self.total, 0.0), 1.0)
+
+
+@dataclass(frozen=True)
 class LevelImportResult:
     level_dir: Path
     client_root: Path
@@ -187,6 +201,7 @@ def import_level(
     texture_animation_fps: int = 10,
     load_cgf: Callable | None = None,
     get_cgf_import_report: Callable | None = None,
+    progress_callback: Callable[[LevelImportProgress], None] | None = None,
 ) -> LevelImportResult:
     if not client_root:
         raise ValueError("client_root is required for level CGF import")
@@ -205,7 +220,7 @@ def import_level(
         import_static_lights = False
         import_mission_placeables = False
         import_particle_effects = False
-        import_cga_entities = False
+        import_cga_entities = True
         animate_cga_controllers = False
         animate_texture_sequences = False
         animate_shader_uv_scroll = False
@@ -221,6 +236,13 @@ def import_level(
     if import_terrain and not terrain_path.is_file():
         raise FileNotFoundError(f"terrain preview requested but file is missing: {terrain_path}")
 
+    _emit_progress(
+        progress_callback,
+        stage="discover",
+        message="Reading level sources",
+        completed=0,
+        total=1,
+    )
     level_data, objects, brush = _parse_level_cgf_sources(level_path)
     jobs = collect_level_cgf_jobs(objects, brush, import_mode=import_mode)
     resolution = resolve_level_cgf_jobs(jobs.jobs, client_root_path)
@@ -233,6 +255,40 @@ def import_level(
         if limited_preview
         else template_collection.templates
     )
+    optional_stage_count = sum(
+        (
+            import_terrain,
+            import_water,
+            import_textured_liquid_surface,
+            import_static_lights,
+            import_mission_placeables,
+            import_particle_effects,
+            import_cga_entities,
+        )
+    )
+    progress_total = 2 + len(selected_templates) + optional_stage_count
+    progress_completed = 1
+    _emit_progress(
+        progress_callback,
+        stage="discover",
+        message=(
+            f"Resolved {len(selected_templates)} of "
+            f"{len(template_collection.templates)} CGF templates"
+        ),
+        completed=progress_completed,
+        total=progress_total,
+    )
+
+    def advance_progress(stage: str, message: str) -> None:
+        nonlocal progress_completed
+        progress_completed += 1
+        _emit_progress(
+            progress_callback,
+            stage=stage,
+            message=message,
+            completed=progress_completed,
+            total=progress_total,
+        )
 
     import bpy
 
@@ -270,7 +326,17 @@ def import_level(
     particle_effects_result = None
     cga_entities_result = None
 
-    for template in selected_templates:
+    for template_index, template in enumerate(selected_templates, start=1):
+        _emit_progress(
+            progress_callback,
+            stage="cgf_templates",
+            message=(
+                f"Importing CGF template {template_index}/{len(selected_templates)}: "
+                f"{template.resolved_path.name}"
+            ),
+            completed=progress_completed,
+            total=progress_total,
+        )
         collections_before = set(bpy.data.collections)
         result = load_cgf(
             context,
@@ -334,6 +400,10 @@ def import_level(
                 skipped_templates.append(LevelCgfImportSkip(**failure_kwargs))
             else:
                 failures.append(LevelCgfImportFailure(**failure_kwargs))
+            advance_progress(
+                "cgf_templates",
+                f"Processed CGF template {template_index}/{len(selected_templates)}",
+            )
             continue
 
         new_collections = tuple(
@@ -374,8 +444,19 @@ def import_level(
             root_collection,
             new_collections,
         )
+        advance_progress(
+            "cgf_templates",
+            f"Processed CGF template {template_index}/{len(selected_templates)}",
+        )
 
     if import_terrain:
+        _emit_progress(
+            progress_callback,
+            stage="terrain",
+            message="Creating terrain",
+            completed=progress_completed,
+            total=progress_total,
+        )
         terrain_mesh_result = create_terrain_mesh(
             context,
             parse_land_map_h32(terrain_path),
@@ -385,8 +466,16 @@ def import_level(
             import_terrain_blend_attributes=import_terrain_blend_attributes,
             import_terrain_blend_shader=import_terrain_blend_shader,
         )
+        advance_progress("terrain", "Terrain created")
 
     if import_water:
+        _emit_progress(
+            progress_callback,
+            stage="water",
+            message="Creating water plane",
+            completed=progress_completed,
+            total=progress_total,
+        )
         water_result = create_water_plane(
             context,
             level_data.level_info,
@@ -396,8 +485,16 @@ def import_level(
                 else DEFAULT_XY_SCALE
             ),
         )
+        advance_progress("water", "Water plane processed")
 
     if import_textured_liquid_surface:
+        _emit_progress(
+            progress_callback,
+            stage="liquid_material",
+            message="Applying liquid material",
+            completed=progress_completed,
+            total=progress_total,
+        )
         if not import_water:
             liquid_surface_result = skipped_liquid_surface_result(
                 requested=True,
@@ -426,16 +523,32 @@ def import_level(
                 water_result,
                 recipe,
             )
+        advance_progress("liquid_material", "Liquid material processed")
 
     if import_static_lights:
+        _emit_progress(
+            progress_callback,
+            stage="static_lights",
+            message="Creating static lights",
+            completed=progress_completed,
+            total=progress_total,
+        )
         static_lights_result = create_static_deferred_lights(
             context,
             level_path,
             mode=static_lights_mode,
             power=static_lights_power,
         )
+        advance_progress("static_lights", "Static lights processed")
 
     if import_mission_placeables:
+        _emit_progress(
+            progress_callback,
+            stage="mission_placeables",
+            message="Importing mission placeables",
+            completed=progress_completed,
+            total=progress_total,
+        )
         mission_placeables_result = create_mission_placeables(
             context,
             level_path,
@@ -449,20 +562,37 @@ def import_level(
             load_cgf=load_cgf,
             get_cgf_import_report=get_cgf_import_report,
         )
+        advance_progress("mission_placeables", "Mission placeables processed")
 
     if import_particle_effects:
+        _emit_progress(
+            progress_callback,
+            stage="particle_effects",
+            message="Importing particle effects",
+            completed=progress_completed,
+            total=progress_total,
+        )
         particle_effects_result = create_particle_effects(
             context,
             level_path,
             client_root_path,
             level_data=level_data,
         )
+        advance_progress("particle_effects", "Particle effects processed")
 
     if import_cga_entities:
+        _emit_progress(
+            progress_callback,
+            stage="cga_entities",
+            message="Importing placed CGA entities",
+            completed=progress_completed,
+            total=progress_total,
+        )
         cga_entities_result = create_cga_entities(
             context,
             level_path,
             client_root_path,
+            import_mode=import_mode,
             apply_angles=True,
             apply_smoothing_groups=apply_smoothing_groups,
             animate_texture_sequences=animate_texture_sequences,
@@ -472,6 +602,7 @@ def import_level(
             load_cgf=load_cgf,
             get_cgf_import_report=get_cgf_import_report,
         )
+        advance_progress("cga_entities", "CGA entities processed")
 
     objects_created = len(bpy.data.objects) - objects_before
     meshes_created = len(bpy.data.meshes) - meshes_before
@@ -525,6 +656,7 @@ def import_level(
             root_collection.children.unlink(preview_collection)
         bpy.data.collections.remove(preview_collection)
 
+    advance_progress("complete", "Level import complete")
     return LevelImportResult(
         level_dir=level_path,
         client_root=client_root_path,
@@ -571,6 +703,26 @@ def import_level(
         meshes_created=meshes_created,
         failures=tuple(failures),
         skipped_templates=tuple(skipped_templates),
+    )
+
+
+def _emit_progress(
+    callback: Callable[[LevelImportProgress], None] | None,
+    *,
+    stage: str,
+    message: str,
+    completed: int,
+    total: int,
+) -> None:
+    if callback is None:
+        return
+    callback(
+        LevelImportProgress(
+            stage=stage,
+            message=message,
+            completed=completed,
+            total=total,
+        )
     )
 
 

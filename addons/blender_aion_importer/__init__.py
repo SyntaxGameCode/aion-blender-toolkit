@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Aion Importer",
     "author": "Aion Blender Toolkit",
-    "version": (0, 4, 30),
+    "version": (0, 4, 32),
     "blender": (4, 0, 0),
     "location": "File > Import",
     "description": "Import Aion CGF assets",
